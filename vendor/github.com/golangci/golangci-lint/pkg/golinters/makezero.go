@@ -1,10 +1,10 @@
 package golinters
 
 import (
+	"fmt"
 	"sync"
 
 	"github.com/ashanbrown/makezero/makezero"
-	"github.com/pkg/errors"
 	"golang.org/x/tools/go/analysis"
 
 	"github.com/golangci/golangci-lint/pkg/config"
@@ -15,7 +15,6 @@ import (
 
 const makezeroName = "makezero"
 
-//nolint:dupl
 func NewMakezero(settings *config.MakezeroSettings) *goanalysis.Linter {
 	var mu sync.Mutex
 	var resIssues []goanalysis.Issue
@@ -23,7 +22,7 @@ func NewMakezero(settings *config.MakezeroSettings) *goanalysis.Linter {
 	analyzer := &analysis.Analyzer{
 		Name: makezeroName,
 		Doc:  goanalysis.TheOnlyanalyzerDoc,
-		Run: func(pass *analysis.Pass) (interface{}, error) {
+		Run: func(pass *analysis.Pass) (any, error) {
 			issues, err := runMakeZero(pass, settings)
 			if err != nil {
 				return nil, err
@@ -59,7 +58,7 @@ func runMakeZero(pass *analysis.Pass, settings *config.MakezeroSettings) ([]goan
 	for _, file := range pass.Files {
 		hints, err := zero.Run(pass.Fset, pass.TypesInfo, file)
 		if err != nil {
-			return nil, errors.Wrapf(err, "makezero linter failed on file %q", file.Name.String())
+			return nil, fmt.Errorf("makezero linter failed on file %q: %w", file.Name.String(), err)
 		}
 
 		for _, hint := range hints {
