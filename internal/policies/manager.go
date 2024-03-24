@@ -248,34 +248,34 @@ func (m *Manager) LastUpdateFor(ctx context.Context, objectName string, isMachin
 func (m *Manager) getSubscriptionState(ctx context.Context) (subscriptionEnabled bool) {
 	log.Debug(ctx, "Refresh subscription state")
 
-	defer func() {
-		m.Lock()
-		m.subscriptionEnabled = subscriptionEnabled
-		m.Unlock()
-
-		if subscriptionEnabled {
-			log.Debug(ctx, "Ubuntu advantage is enabled for GPO restrictions")
-			return
-		}
-
-		log.Debug(ctx, "Ubuntu advantage is not enabled for GPO restrictions")
-	}()
-
-	// Check if the device is entitled to the Pro policy
-	prop, err := m.subscriptionDbus.GetProperty(consts.SubscriptionDbusInterface + ".Attached")
-	if err != nil {
-		log.Warningf(ctx, "no dbus connection to Ubuntu Advantage. Considering device as not enabled: %v", err)
-		return false
-	}
-	enabled, ok := prop.Value().(bool)
-	if !ok {
-		log.Warningf(ctx, "dbus returned an improper value from Ubuntu Advantage. Considering device as not enabled: %v", prop.Value())
-		return false
-	}
-
-	if !enabled {
-		return false
-	}
+//	defer func() {
+//		m.Lock()
+//		m.subscriptionEnabled = subscriptionEnabled
+//		m.Unlock()
+//
+//		if subscriptionEnabled {
+//			log.Debug(ctx, "Ubuntu advantage is enabled for GPO restrictions")
+//			return
+//		}
+//
+//		log.Debug(ctx, "Ubuntu advantage is not enabled for GPO restrictions")
+//	}()
+//
+//	// Check if the device is entitled to the Pro policy
+//	prop, err := m.subscriptionDbus.GetProperty(consts.SubscriptionDbusInterface + ".Attached")
+//	if err != nil {
+//		log.Warningf(ctx, "no dbus connection to Ubuntu Advantage. Considering device as not enabled: %v", err)
+//		return false
+//	}
+//	enabled, ok := prop.Value().(bool)
+//	if !ok {
+//		log.Warningf(ctx, "dbus returned an improper value from Ubuntu Advantage. Considering device as not enabled: %v", prop.Value())
+//		return false
+//	}
+//
+//	if !enabled {
+//		return false
+//	}
 
 	return true
 }

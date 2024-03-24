@@ -48,6 +48,8 @@ DEBIAN_FRONTEND=noninteractive apt-get -y build-dep .
 log "Building package"
 DEB_BUILD_OPTIONS=nocheck debuild -b -uc -us
 
+codename=$(grep VERSION_CODENAME /etc/os-release | cut -d= -f2)
+
 mkdir -p /output/${codename}
 # Copy packages to output dir with user's permissions
 if [ -n "${USER+x}" ] && [ -n "${GROUP+x}" ]; then
