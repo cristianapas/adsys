@@ -1,0 +1,198 @@
+name: QA
+on:
+  push:
+    branches:
+      - main
+    tags:
+      - '*'
+  pull_request:
+
+jobs:
+  quality:
+    name: Code quality and mod files up to date
+    runs-on: ubuntu-latest
+    container: ubuntu:latest
+    steps:
+      # We install git before checkouting so that actions/checkout use the git command and persists .git/ thus
+      - name: Install dependencies
+        run: |
+          export DEBIAN_FRONTEND=noninteractive
+          apt update
+          apt install -y ca-certificates git gcc pkg-config libsmbclient-dev
+      - name: work around permission issue with git vulnerability (we are local here). TO REMOVE
+        run: git config --global --add safe.directory /__w/adsys/adsys
+      - uses: actions/checkout@v2
+      - name: Code formatting, vet, static checker Security…
+        uses: golangci/golangci-lint-action@v2
+        with:
+          args: "--config .golangci-ci.yaml"
+      - name: Module files are up to date
+        run: |
+          set -eu
+
+          go mod tidy
+          MODIFIED=`git status --porcelain go.sum go.mod`
+          if [ -n "$MODIFIED" ]; then
+              echo "ERROR: go module files aren't up to date:"
+              git --no-pager diff go.mod go.sum
+              exit 1
+          fi
+        if: ${{ always() }}
+      - name: Building
+        run: go build ./...
+        if: ${{ always() }}
+
+  tests:
+    name: Tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v2
+      - uses: actions/setup-go@v3
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Install dependencies
+        run: |
+          sudo DEBIAN_FRONTEND=noninteractive apt update
+          sudo DEBIAN_FRONTEND=noninteractive apt install -y ca-certificates gcc gettext libsmbclient-dev samba sudo dconf-cli python3-coverage libnss-wrapper
+      - name: Set required environment variables
+        run: echo "SUDO_PACKAGES=$(cat debian/tests/.sudo-packages)" >> $GITHUB_ENV
+      - name: Authenticate to docker local registry and pull image with our token
+        run: |
+          set -eu
+
+          echo "${{ github.token }}" | docker login https://docker.pkg.github.com -u ${GITHUB_ACTOR} --password-stdin
+          docker pull docker.pkg.github.com/ubuntu/adsys/systemdaemons:0.1
+      - name: Run tests
+        run: |
+          set -eu
+
+          ADSYS_SKIP_SUDO_TESTS=1 go test -coverpkg=./... -coverprofile=/tmp/coverage.out -covermode=count ./...
+
+          # Run integration tests that need sudo
+          # Use command substitution to preserve go binary path (sudo does not preserve path even with -E)
+          sudo -E $(which go) test -coverpkg=./... -coverprofile=/tmp/coverage.sudo.out -covermode=count $SUDO_PACKAGES
+
+          # Combine coverage files, and filter out test utilities and generated files
+          echo "mode: set" > /tmp/coverage.combined.out
+          grep -hv -e "mode: set" -e "testutils" -e "pb.go:" /tmp/coverage.out /tmp/coverage.sudo.out > /tmp/coverage.combined.out
+      - name: Run tests (with race detector)
+        run: |
+          ADSYS_SKIP_SUDO_TESTS=1 go test -race ./...
+          # Use command substitution to preserve go binary path (sudo does not preserve path even with -E)
+          sudo -E $(which go) test -race ${{ env.sudo_packages }}
+      - name: Install curl for codecov
+        run: |
+          sudo DEBIAN_FRONTEND=noninteractive apt update
+          sudo DEBIAN_FRONTEND=noninteractive apt install -y curl
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@v1
+        with:
+          file: /tmp/coverage.combined.out
+
+  adwatchd-tests:
+    name: Windows tests for adwatchd
+    runs-on: windows-latest
+    env:
+      packages: ./internal/loghooks ./internal/watchdservice ./internal/watchdtui ./internal/watcher ./internal/config/watchd ./cmd/adwatchd/integration_tests
+    steps:
+      - uses: actions/checkout@v2
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@v3
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Build installer
+        run: |
+          tag=$(git describe --tags)
+          export GOFLAGS=-ldflags=-X=github.com/ubuntu/adsys/internal/consts.Version=$tag
+
+          # Transforms git describe output:
+          # - from X.Y.Z-P-gSHA to X.Y.Z.P for untagged commits
+          # - from vX.Y.Z to X.Y.Z for tagged commits
+          INSTALLER_VERSION=$(echo $tag | tr -d v | tr '-' '.' | cut -d. -f-4)
+
+          go build ./cmd/adwatchd
+          iscc.exe //DAPP_VERSION=$INSTALLER_VERSION installer/setup.iss
+        shell: bash
+      - name: Run tests
+        run: go test ${{ env.packages }}
+      - name: Run tests (with race detector)
+        env:
+          ADWATCHD_SKIP_INTEGRATION_TESTS: 1
+        run: go test -race ${{ env.packages }}
+        # There are some cryptic "The pipe has been closed" errors on Windows
+        # that arise from running the tests with the race detector enabled. We
+        # believe this originates outside our code, thus we avoid running the
+        # integration suite with the race detector.
+        #
+        # As the Linux job already exercises the entire testsuite with race
+        # detection enabled and the code is mostly platform independent, this
+        # should be a safe action to take.
+      - name: Attach installer artifact to workflow run
+        uses: actions/upload-artifact@v3
+        with:
+          name: adwatchd_setup
+          path: installer/Output/adwatchd_setup.exe
+      - name: Draft release and publish installer artifact
+        uses: softprops/action-gh-release@v1
+        if: startsWith(github.ref, 'refs/tags/')
+        with:
+          files: installer/Output/adwatchd_setup.exe
+
+  generators:
+    name: Generated files are up to date
+    runs-on: ubuntu-latest
+    container: ubuntu:latest
+    steps:
+      # Add dependencies
+      - name: Install dependencies
+        run: |
+          export DEBIAN_FRONTEND=noninteractive
+          apt update
+          apt install -y ca-certificates gcc pkg-config protobuf-compiler gettext git libsmbclient-dev
+      - name: work around permission issue with git vulnerability (we are local here). TO REMOVE
+        run: git config --global --add safe.directory /__w/adsys/adsys
+      - uses: actions/checkout@v2
+      - uses: actions/setup-go@v3
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Install go grpc protoc generator
+        run: |
+          set -eu
+
+          go install google.golang.org/protobuf/cmd/protoc-gen-go \
+            google.golang.org/grpc/cmd/protoc-gen-go-grpc
+      - name: Check generated files
+        run: |
+          set -eu
+
+          # Ignore mod file changes; doc/ and README.md and po files
+          # Modules are handled in another check and aren't related to generator
+          # po and README.md files will be automatically updated once master in master.
+          git update-index --assume-unchanged go.* po/* doc/*.md README.md
+          on_exit() {
+              # Restore files
+              git update-index --no-assume-unchanged go.* po/* doc/*.md README.md
+          }
+          trap on_exit EXIT INT QUIT ABRT PIPE TERM
+
+          go generate ./...
+
+          # Handle everything but po and assets files
+          modified_files=`git status --porcelain --untracked-files=no`
+
+          # Check generated files
+          MODIFIED=""
+          if [ -n "$modified_files" ]; then
+              # Ignore assets modification time and protoc version.
+              MODIFIED=`git difftool -y -x "diff -I 'modTime' -I '^//.*protoc.*v'"`
+          fi
+
+          if [ -n "$MODIFIED" ]; then
+              echo "ERROR: 'go generate' modified files:"
+              git --no-pager diff
+              exit 1
+          fi

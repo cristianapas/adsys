@@ -1,0 +1,9 @@
+'''apport package hook for adsys
+
+(c) 2021 Canonical Ltd.
+'''
+
+import apport.hookutils
+
+def add_info(report):
+    apport.hookutils.attach_related_packages(report, ["sssd", "python3-samba"])
