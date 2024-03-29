@@ -2,7 +2,6 @@ package golinters
 
 import (
 	"fmt"
-	"strings"
 	"sync"
 
 	gcicfg "github.com/daixiang0/gci/pkg/config"
@@ -12,11 +11,11 @@ import (
 	"github.com/hexops/gotextdiff"
 	"github.com/hexops/gotextdiff/myers"
 	"github.com/hexops/gotextdiff/span"
-	"github.com/pkg/errors"
 	"golang.org/x/tools/go/analysis"
 
 	"github.com/golangci/golangci-lint/pkg/config"
-	"github.com/golangci/golangci-lint/pkg/golinters/goanalysis"
+	"github.com/golangci/golangci-lint/pkg/goanalysis"
+	"github.com/golangci/golangci-lint/pkg/golinters/internal"
 	"github.com/golangci/golangci-lint/pkg/lint/linter"
 )
 
@@ -37,6 +36,7 @@ func NewGci(settings *config.GciSettings) *goanalysis.Linter {
 		rawCfg := gcicfg.YamlConfig{
 			Cfg: gcicfg.BoolConfig{
 				SkipGenerated: settings.SkipGenerated,
+				CustomOrder:   settings.CustomOrder,
 			},
 			SectionStrings: settings.Sections,
 		}
@@ -49,7 +49,7 @@ func NewGci(settings *config.GciSettings) *goanalysis.Linter {
 		var err error
 		cfg, err = rawCfg.Parse()
 		if err != nil {
-			linterLogger.Fatalf("gci: configuration parsing: %v", err)
+			internal.LinterLogger.Fatalf("gci: configuration parsing: %v", err)
 		}
 	}
 
@@ -57,11 +57,11 @@ func NewGci(settings *config.GciSettings) *goanalysis.Linter {
 
 	return goanalysis.NewLinter(
 		gciName,
-		"Gci controls golang package import order and makes it always deterministic.",
+		"Gci controls Go package import order and makes it always deterministic.",
 		[]*analysis.Analyzer{analyzer},
 		nil,
 	).WithContextSetter(func(lintCtx *linter.Context) {
-		analyzer.Run = func(pass *analysis.Pass) (interface{}, error) {
+		analyzer.Run = func(pass *analysis.Pass) (any, error) {
 			issues, err := runGci(pass, lintCtx, cfg, &lock)
 			if err != nil {
 				return nil, err
@@ -83,7 +83,7 @@ func NewGci(settings *config.GciSettings) *goanalysis.Linter {
 }
 
 func runGci(pass *analysis.Pass, lintCtx *linter.Context, cfg *gcicfg.Config, lock *sync.Mutex) ([]goanalysis.Issue, error) {
-	fileNames := getFileNames(pass)
+	fileNames := internal.GetFileNames(pass)
 
 	var diffs []string
 	err := diffFormattedFilesToArray(fileNames, *cfg, &diffs, lock)
@@ -98,9 +98,9 @@ func runGci(pass *analysis.Pass, lintCtx *linter.Context, cfg *gcicfg.Config, lo
 			continue
 		}
 
-		is, err := extractIssuesFromPatch(diff, lintCtx, gciName)
+		is, err := internal.ExtractIssuesFromPatch(diff, lintCtx, gciName, getIssuedTextGci)
 		if err != nil {
-			return nil, errors.Wrapf(err, "can't extract issues from gci diff output %s", diff)
+			return nil, fmt.Errorf("can't extract issues from gci diff output %s: %w", diff, err)
 		}
 
 		for i := range is {
@@ -119,7 +119,7 @@ func diffFormattedFilesToArray(paths []string, cfg gcicfg.Config, diffs *[]strin
 	log.InitLogger()
 	defer func() { _ = log.L().Sync() }()
 
-	return gci.ProcessFiles(io.GoFilesInPathsGenerator(paths), cfg, func(filePath string, unmodifiedFile, formattedFile []byte) error {
+	return gci.ProcessFiles(io.GoFilesInPathsGenerator(paths, true), cfg, func(filePath string, unmodifiedFile, formattedFile []byte) error {
 		fileURI := span.URIFromPath(filePath)
 		edits := myers.ComputeEdits(fileURI, string(unmodifiedFile), string(formattedFile))
 		unifiedEdits := gotextdiff.ToUnified(filePath, filePath, string(unmodifiedFile), edits)
@@ -130,22 +130,28 @@ func diffFormattedFilesToArray(paths []string, cfg gcicfg.Config, diffs *[]strin
 	})
 }
 
-func getErrorTextForGci(settings config.GciSettings) string {
+func getIssuedTextGci(settings *config.LintersSettings) string {
 	text := "File is not `gci`-ed"
 
-	hasOptions := settings.SkipGenerated || len(settings.Sections) > 0
+	hasOptions := settings.Gci.SkipGenerated || len(settings.Gci.Sections) > 0
 	if !hasOptions {
 		return text
 	}
 
 	text += " with"
 
-	if settings.SkipGenerated {
+	if settings.Gci.SkipGenerated {
 		text += " --skip-generated"
 	}
 
-	if len(settings.Sections) > 0 {
-		text += " -s " + strings.Join(settings.Sections, ",")
+	if len(settings.Gci.Sections) > 0 {
+		for _, section := range settings.Gci.Sections {
+			text += " -s " + section
+		}
+	}
+
+	if settings.Gci.CustomOrder {
+		text += " --custom-order"
 	}
 
 	return text

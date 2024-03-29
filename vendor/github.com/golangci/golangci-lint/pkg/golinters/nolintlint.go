@@ -8,7 +8,7 @@ import (
 	"golang.org/x/tools/go/analysis"
 
 	"github.com/golangci/golangci-lint/pkg/config"
-	"github.com/golangci/golangci-lint/pkg/golinters/goanalysis"
+	"github.com/golangci/golangci-lint/pkg/goanalysis"
 	"github.com/golangci/golangci-lint/pkg/golinters/nolintlint"
 	"github.com/golangci/golangci-lint/pkg/lint/linter"
 	"github.com/golangci/golangci-lint/pkg/result"
@@ -16,7 +16,6 @@ import (
 
 const NoLintLintName = "nolintlint"
 
-//nolint:dupl
 func NewNoLintLint(settings *config.NoLintLintSettings) *goanalysis.Linter {
 	var mu sync.Mutex
 	var resIssues []goanalysis.Issue
@@ -24,7 +23,7 @@ func NewNoLintLint(settings *config.NoLintLintSettings) *goanalysis.Linter {
 	analyzer := &analysis.Analyzer{
 		Name: NoLintLintName,
 		Doc:  goanalysis.TheOnlyanalyzerDoc,
-		Run: func(pass *analysis.Pass) (interface{}, error) {
+		Run: func(pass *analysis.Pass) (any, error) {
 			issues, err := runNoLintLint(pass, settings)
 			if err != nil {
 				return nil, err
@@ -57,9 +56,6 @@ func runNoLintLint(pass *analysis.Pass, settings *config.NoLintLintSettings) ([]
 	if settings.RequireExplanation {
 		needs |= nolintlint.NeedsExplanation
 	}
-	if !settings.AllowLeadingSpace {
-		needs |= nolintlint.NeedsMachineOnly
-	}
 	if settings.RequireSpecific {
 		needs |= nolintlint.NeedsSpecific
 	}
@@ -79,7 +75,7 @@ func runNoLintLint(pass *analysis.Pass, settings *config.NoLintLintSettings) ([]
 
 	lintIssues, err := lnt.Run(pass.Fset, nodes...)
 	if err != nil {
-		return nil, fmt.Errorf("linter failed to run: %s", err)
+		return nil, fmt.Errorf("linter failed to run: %w", err)
 	}
 
 	var issues []goanalysis.Issue

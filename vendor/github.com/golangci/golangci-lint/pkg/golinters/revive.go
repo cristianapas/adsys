@@ -7,18 +7,17 @@ import (
 	"go/token"
 	"os"
 	"reflect"
-	"strings"
 	"sync"
 
 	"github.com/BurntSushi/toml"
 	reviveConfig "github.com/mgechev/revive/config"
 	"github.com/mgechev/revive/lint"
 	"github.com/mgechev/revive/rule"
-	"github.com/pkg/errors"
 	"golang.org/x/tools/go/analysis"
 
 	"github.com/golangci/golangci-lint/pkg/config"
-	"github.com/golangci/golangci-lint/pkg/golinters/goanalysis"
+	"github.com/golangci/golangci-lint/pkg/goanalysis"
+	"github.com/golangci/golangci-lint/pkg/golinters/internal"
 	"github.com/golangci/golangci-lint/pkg/lint/linter"
 	"github.com/golangci/golangci-lint/pkg/logutils"
 	"github.com/golangci/golangci-lint/pkg/result"
@@ -26,7 +25,7 @@ import (
 
 const reviveName = "revive"
 
-var reviveDebugf = logutils.Debug("revive")
+var reviveDebugf = logutils.Debug(logutils.DebugKeyRevive)
 
 // jsonObject defines a JSON object of a failure
 type jsonObject struct {
@@ -36,7 +35,7 @@ type jsonObject struct {
 
 // NewRevive returns a new Revive linter.
 //
-//nolint:dupl
+
 func NewRevive(settings *config.ReviveSettings) *goanalysis.Linter {
 	var mu sync.Mutex
 	var resIssues []goanalysis.Issue
@@ -53,7 +52,7 @@ func NewRevive(settings *config.ReviveSettings) *goanalysis.Linter {
 		[]*analysis.Analyzer{analyzer},
 		nil,
 	).WithContextSetter(func(lintCtx *linter.Context) {
-		analyzer.Run = func(pass *analysis.Pass) (interface{}, error) {
+		analyzer.Run = func(pass *analysis.Pass) (any, error) {
 			issues, err := runRevive(lintCtx, pass, settings)
 			if err != nil {
 				return nil, err
@@ -75,7 +74,7 @@ func NewRevive(settings *config.ReviveSettings) *goanalysis.Linter {
 }
 
 func runRevive(lintCtx *linter.Context, pass *analysis.Pass, settings *config.ReviveSettings) ([]goanalysis.Issue, error) {
-	packages := [][]string{getFileNames(pass)}
+	packages := [][]string{internal.GetFileNames(pass)}
 
 	conf, err := getReviveConfig(settings)
 	if err != nil {
@@ -162,7 +161,8 @@ func reviveToIssue(pass *analysis.Pass, object *jsonObject) goanalysis.Issue {
 // This function mimics the GetConfig function of revive.
 // This allows to get default values and right types.
 // https://github.com/golangci/golangci-lint/issues/1745
-// https://github.com/mgechev/revive/blob/v1.1.4/config/config.go#L182
+// https://github.com/mgechev/revive/blob/v1.3.7/config/config.go#L217
+// https://github.com/mgechev/revive/blob/v1.3.7/config/config.go#L169-L174
 func getReviveConfig(cfg *config.ReviveSettings) (*lint.Config, error) {
 	conf := defaultConfig()
 
@@ -172,26 +172,33 @@ func getReviveConfig(cfg *config.ReviveSettings) (*lint.Config, error) {
 
 		err := toml.NewEncoder(buf).Encode(rawRoot)
 		if err != nil {
-			return nil, errors.Wrap(err, "failed to encode configuration")
+			return nil, fmt.Errorf("failed to encode configuration: %w", err)
 		}
 
 		conf = &lint.Config{}
 		_, err = toml.NewDecoder(buf).Decode(conf)
 		if err != nil {
-			return nil, errors.Wrap(err, "failed to decode configuration")
+			return nil, fmt.Errorf("failed to decode configuration: %w", err)
 		}
 	}
 
 	normalizeConfig(conf)
-	ignoreRules(conf)
+
+	for k, r := range conf.Rules {
+		err := r.Initialize()
+		if err != nil {
+			return nil, fmt.Errorf("error in config of rule %q: %w", k, err)
+		}
+		conf.Rules[k] = r
+	}
 
 	reviveDebugf("revive configuration: %#v", conf)
 
 	return conf, nil
 }
 
-func createConfigMap(cfg *config.ReviveSettings) map[string]interface{} {
-	rawRoot := map[string]interface{}{
+func createConfigMap(cfg *config.ReviveSettings) map[string]any {
+	rawRoot := map[string]any{
 		"ignoreGeneratedHeader": cfg.IgnoreGeneratedHeader,
 		"confidence":            cfg.Confidence,
 		"severity":              cfg.Severity,
@@ -200,9 +207,9 @@ func createConfigMap(cfg *config.ReviveSettings) map[string]interface{} {
 		"enableAllRules":        cfg.EnableAllRules,
 	}
 
-	rawDirectives := map[string]map[string]interface{}{}
+	rawDirectives := map[string]map[string]any{}
 	for _, directive := range cfg.Directives {
-		rawDirectives[directive.Name] = map[string]interface{}{
+		rawDirectives[directive.Name] = map[string]any{
 			"severity": directive.Severity,
 		}
 	}
@@ -211,12 +218,13 @@ func createConfigMap(cfg *config.ReviveSettings) map[string]interface{} {
 		rawRoot["directive"] = rawDirectives
 	}
 
-	rawRules := map[string]map[string]interface{}{}
+	rawRules := map[string]map[string]any{}
 	for _, s := range cfg.Rules {
-		rawRules[s.Name] = map[string]interface{}{
+		rawRules[s.Name] = map[string]any{
 			"severity":  s.Severity,
 			"arguments": safeTomlSlice(s.Arguments),
 			"disabled":  s.Disabled,
+			"exclude":   s.Exclude,
 		}
 	}
 
@@ -227,19 +235,19 @@ func createConfigMap(cfg *config.ReviveSettings) map[string]interface{} {
 	return rawRoot
 }
 
-func safeTomlSlice(r []interface{}) []interface{} {
+func safeTomlSlice(r []any) []any {
 	if len(r) == 0 {
 		return nil
 	}
 
-	if _, ok := r[0].(map[interface{}]interface{}); !ok {
+	if _, ok := r[0].(map[any]any); !ok {
 		return r
 	}
 
-	var typed []interface{}
+	var typed []any
 	for _, elt := range r {
-		item := map[string]interface{}{}
-		for k, v := range elt.(map[interface{}]interface{}) {
+		item := map[string]any{}
+		for k, v := range elt.(map[any]any) {
 			item[k.(string)] = v
 		}
 
@@ -250,9 +258,9 @@ func safeTomlSlice(r []interface{}) []interface{} {
 }
 
 // This element is not exported by revive, so we need copy the code.
-// Extracted from https://github.com/mgechev/revive/blob/v1.1.4/config/config.go#L15
+// Extracted from https://github.com/mgechev/revive/blob/v1.3.7/config/config.go#L15
 var defaultRules = []lint.Rule{
-	// &rule.VarDeclarationsRule{}, // TODO(ldez) https://github.com/golangci/golangci-lint/issues/2997 (var-declaration)
+	&rule.VarDeclarationsRule{},
 	&rule.PackageCommentsRule{},
 	&rule.DotImportsRule{},
 	&rule.BlankImportsRule{},
@@ -260,44 +268,44 @@ var defaultRules = []lint.Rule{
 	&rule.VarNamingRule{},
 	&rule.IndentErrorFlowRule{},
 	&rule.RangeRule{},
-	// &rule.ErrorfRule{}, // TODO(ldez) https://github.com/golangci/golangci-lint/issues/2997 (errorf
+	&rule.ErrorfRule{},
 	&rule.ErrorNamingRule{},
 	&rule.ErrorStringsRule{},
 	&rule.ReceiverNamingRule{},
 	&rule.IncrementDecrementRule{},
 	&rule.ErrorReturnRule{},
-	// &rule.UnexportedReturnRule{}, // TODO(ldez) https://github.com/golangci/golangci-lint/issues/2997 (unexported-return)
-	// &rule.TimeNamingRule{}, // TODO(ldez) https://github.com/golangci/golangci-lint/issues/2997 (time-naming)
-	// &rule.ContextKeysType{}, // TODO(ldez) https://github.com/golangci/golangci-lint/issues/2997 (context-keys-type)
+	&rule.UnexportedReturnRule{},
+	&rule.TimeNamingRule{},
+	&rule.ContextKeysType{},
 	&rule.ContextAsArgumentRule{},
+	&rule.EmptyBlockRule{},
+	&rule.SuperfluousElseRule{},
+	&rule.UnusedParamRule{},
+	&rule.UnreachableCodeRule{},
+	&rule.RedefinesBuiltinIDRule{},
 }
 
 var allRules = append([]lint.Rule{
 	&rule.ArgumentsLimitRule{},
 	&rule.CyclomaticRule{},
 	&rule.FileHeaderRule{},
-	&rule.EmptyBlockRule{},
-	&rule.SuperfluousElseRule{},
 	&rule.ConfusingNamingRule{},
 	&rule.GetReturnRule{},
 	&rule.ModifiesParamRule{},
 	&rule.ConfusingResultsRule{},
 	&rule.DeepExitRule{},
-	&rule.UnusedParamRule{},
-	&rule.UnreachableCodeRule{},
 	&rule.AddConstantRule{},
 	&rule.FlagParamRule{},
 	&rule.UnnecessaryStmtRule{},
 	&rule.StructTagRule{},
-	// &rule.ModifiesValRecRule{}, // TODO(ldez) https://github.com/golangci/golangci-lint/issues/2997 (modifies-value-receiver)
+	&rule.ModifiesValRecRule{},
 	&rule.ConstantLogicalExprRule{},
 	&rule.BoolLiteralRule{},
-	&rule.RedefinesBuiltinIDRule{},
-	&rule.ImportsBlacklistRule{},
+	&rule.ImportsBlocklistRule{},
 	&rule.FunctionResultsLimitRule{},
 	&rule.MaxPublicStructsRule{},
 	&rule.RangeValInClosureRule{},
-	// &rule.RangeValAddress{}, // TODO(ldez) https://github.com/golangci/golangci-lint/issues/2997 (range-val-address)
+	&rule.RangeValAddress{},
 	&rule.WaitGroupByValueRule{},
 	&rule.AtomicRule{},
 	&rule.EmptyLinesRule{},
@@ -307,9 +315,9 @@ var allRules = append([]lint.Rule{
 	&rule.ImportShadowingRule{},
 	&rule.BareReturnRule{},
 	&rule.UnusedReceiverRule{},
-	// &rule.UnhandledErrorRule{}, // TODO(ldez) https://github.com/golangci/golangci-lint/issues/2997 (unhandled-error)
+	&rule.UnhandledErrorRule{},
 	&rule.CognitiveComplexityRule{},
-	// &rule.StringOfIntRule{}, // TODO(ldez) https://github.com/golangci/golangci-lint/issues/2997 (string-of-int)
+	&rule.StringOfIntRule{},
 	&rule.StringFormatRule{},
 	&rule.EarlyReturnRule{},
 	&rule.UnconditionalRecursionRule{},
@@ -318,11 +326,21 @@ var allRules = append([]lint.Rule{
 	&rule.UnexportedNamingRule{},
 	&rule.FunctionLength{},
 	&rule.NestedStructs{},
-	&rule.IfReturnRule{},
 	&rule.UselessBreak{},
-	// &rule.TimeEqualRule{}, // TODO(ldez) https://github.com/golangci/golangci-lint/issues/2997 (time-equal)
+	&rule.UncheckedTypeAssertionRule{},
+	&rule.TimeEqualRule{},
 	&rule.BannedCharsRule{},
 	&rule.OptimizeOperandsOrderRule{},
+	&rule.UseAnyRule{},
+	&rule.DataRaceRule{},
+	&rule.CommentSpacingsRule{},
+	&rule.IfReturnRule{},
+	&rule.RedundantImportAlias{},
+	&rule.ImportAliasNamingRule{},
+	&rule.EnforceMapStyleRule{},
+	&rule.EnforceRepeatedArgTypeStyleRule{},
+	&rule.EnforceSliceStyleRule{},
+	&rule.MaxControlNestingRule{},
 }, defaultRules...)
 
 const defaultConfidence = 0.8
@@ -345,8 +363,8 @@ func normalizeConfig(cfg *lint.Config) {
 	}
 	if cfg.EnableAllRules {
 		// Add to the configuration all rules not yet present in it
-		for _, rule := range allRules {
-			ruleName := rule.Name()
+		for _, r := range allRules {
+			ruleName := r.Name()
 			_, alreadyInConf := cfg.Rules[ruleName]
 			if alreadyInConf {
 				continue
@@ -385,34 +403,4 @@ func defaultConfig() *lint.Config {
 		defaultConfig.Rules[r.Name()] = lint.RuleConfig{}
 	}
 	return &defaultConfig
-}
-
-// TODO(ldez) https://github.com/golangci/golangci-lint/issues/2997
-func ignoreRules(conf *lint.Config) {
-	f := []string{
-		"context-keys-type",
-		"errorf",
-		"modifies-value-receiver",
-		"range-val-address",
-		"string-of-int",
-		"time-equal",
-		"time-naming",
-		"unexported-return",
-		"unhandled-error",
-		"var-declaration",
-	}
-
-	var ignored []string
-	for _, s := range f {
-		if _, ok := conf.Rules[s]; ok {
-			delete(conf.Rules, s)
-			ignored = append(ignored, s)
-		}
-	}
-
-	if len(ignored) > 0 {
-		linterLogger.Warnf("revive: the following rules (%s) are ignored due to a performance problem "+
-			"(https://github.com/golangci/golangci-lint/issues/2997)",
-			strings.Join(ignored, ","))
-	}
 }

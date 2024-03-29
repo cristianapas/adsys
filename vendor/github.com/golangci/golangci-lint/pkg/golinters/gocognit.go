@@ -9,14 +9,14 @@ import (
 	"golang.org/x/tools/go/analysis"
 
 	"github.com/golangci/golangci-lint/pkg/config"
-	"github.com/golangci/golangci-lint/pkg/golinters/goanalysis"
+	"github.com/golangci/golangci-lint/pkg/goanalysis"
+	"github.com/golangci/golangci-lint/pkg/golinters/internal"
 	"github.com/golangci/golangci-lint/pkg/lint/linter"
 	"github.com/golangci/golangci-lint/pkg/result"
 )
 
 const gocognitName = "gocognit"
 
-//nolint:dupl
 func NewGocognit(settings *config.GocognitSettings) *goanalysis.Linter {
 	var mu sync.Mutex
 	var resIssues []goanalysis.Issue
@@ -24,7 +24,7 @@ func NewGocognit(settings *config.GocognitSettings) *goanalysis.Linter {
 	analyzer := &analysis.Analyzer{
 		Name: goanalysis.TheOnlyAnalyzerName,
 		Doc:  goanalysis.TheOnlyanalyzerDoc,
-		Run: func(pass *analysis.Pass) (interface{}, error) {
+		Run: func(pass *analysis.Pass) (any, error) {
 			issues := runGocognit(pass, settings)
 
 			if len(issues) == 0 {
@@ -71,7 +71,7 @@ func runGocognit(pass *analysis.Pass, settings *config.GocognitSettings) []goana
 		issues = append(issues, goanalysis.NewIssue(&result.Issue{
 			Pos: s.Pos,
 			Text: fmt.Sprintf("cognitive complexity %d of func %s is high (> %d)",
-				s.Complexity, formatCode(s.FuncName, nil), settings.MinComplexity),
+				s.Complexity, internal.FormatCode(s.FuncName, nil), settings.MinComplexity),
 			FromLinter: gocognitName,
 		}, pass))
 	}

@@ -5,15 +5,15 @@ import (
 	"golang.org/x/tools/go/analysis"
 
 	"github.com/golangci/golangci-lint/pkg/config"
-	"github.com/golangci/golangci-lint/pkg/golinters/goanalysis"
+	"github.com/golangci/golangci-lint/pkg/goanalysis"
 )
 
 func NewPredeclared(settings *config.PredeclaredSettings) *goanalysis.Linter {
 	a := predeclared.Analyzer
 
-	var cfg map[string]map[string]interface{}
+	var cfg map[string]map[string]any
 	if settings != nil {
-		cfg = map[string]map[string]interface{}{
+		cfg = map[string]map[string]any{
 			a.Name: {
 				predeclared.IgnoreFlag:    settings.Ignore,
 				predeclared.QualifiedFlag: settings.Qualified,

@@ -5,18 +5,18 @@ import (
 	"golang.org/x/tools/go/analysis"
 
 	"github.com/golangci/golangci-lint/pkg/config"
-	"github.com/golangci/golangci-lint/pkg/golinters/goanalysis"
+	"github.com/golangci/golangci-lint/pkg/goanalysis"
 )
 
 func NewMaintIdx(cfg *config.MaintIdxSettings) *goanalysis.Linter {
 	analyzer := maintidx.Analyzer
 
-	cfgMap := map[string]map[string]interface{}{
+	cfgMap := map[string]map[string]any{
 		analyzer.Name: {"under": 20},
 	}
 
 	if cfg != nil {
-		cfgMap[analyzer.Name] = map[string]interface{}{
+		cfgMap[analyzer.Name] = map[string]any{
 			"under": cfg.Under,
 		}
 	}

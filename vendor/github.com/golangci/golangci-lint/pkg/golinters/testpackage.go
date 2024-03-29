@@ -7,15 +7,15 @@ import (
 	"golang.org/x/tools/go/analysis"
 
 	"github.com/golangci/golangci-lint/pkg/config"
-	"github.com/golangci/golangci-lint/pkg/golinters/goanalysis"
+	"github.com/golangci/golangci-lint/pkg/goanalysis"
 )
 
 func NewTestpackage(cfg *config.TestpackageSettings) *goanalysis.Linter {
-	var a = testpackage.NewAnalyzer()
+	a := testpackage.NewAnalyzer()
 
-	var settings map[string]map[string]interface{}
+	var settings map[string]map[string]any
 	if cfg != nil {
-		settings = map[string]map[string]interface{}{
+		settings = map[string]map[string]any{
 			a.Name: {
 				testpackage.SkipRegexpFlagName:    cfg.SkipRegexp,
 				testpackage.AllowPackagesFlagName: strings.Join(cfg.AllowPackages, ","),

@@ -8,7 +8,7 @@ import (
 	"golang.org/x/tools/go/analysis"
 
 	"github.com/golangci/golangci-lint/pkg/config"
-	"github.com/golangci/golangci-lint/pkg/golinters/goanalysis"
+	"github.com/golangci/golangci-lint/pkg/goanalysis"
 	"github.com/golangci/golangci-lint/pkg/lint/linter"
 	"github.com/golangci/golangci-lint/pkg/result"
 )
@@ -30,7 +30,7 @@ func NewPromlinter(settings *config.PromlinterSettings) *goanalysis.Linter {
 	analyzer := &analysis.Analyzer{
 		Name: promlinterName,
 		Doc:  goanalysis.TheOnlyanalyzerDoc,
-		Run: func(pass *analysis.Pass) (interface{}, error) {
+		Run: func(pass *analysis.Pass) (any, error) {
 			issues := runPromLinter(pass, promSettings)
 
 			if len(issues) == 0 {

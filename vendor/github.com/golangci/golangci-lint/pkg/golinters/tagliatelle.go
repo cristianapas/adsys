@@ -5,14 +5,15 @@ import (
 	"golang.org/x/tools/go/analysis"
 
 	"github.com/golangci/golangci-lint/pkg/config"
-	"github.com/golangci/golangci-lint/pkg/golinters/goanalysis"
+	"github.com/golangci/golangci-lint/pkg/goanalysis"
 )
 
 func NewTagliatelle(settings *config.TagliatelleSettings) *goanalysis.Linter {
 	cfg := tagliatelle.Config{
 		Rules: map[string]string{
-			"json": "camel",
-			"yaml": "camel",
+			"json":   "camel",
+			"yaml":   "camel",
+			"header": "header",
 		},
 	}
 

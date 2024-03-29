@@ -5,19 +5,20 @@ import (
 	"golang.org/x/tools/go/analysis"
 
 	"github.com/golangci/golangci-lint/pkg/config"
-	"github.com/golangci/golangci-lint/pkg/golinters/goanalysis"
+	"github.com/golangci/golangci-lint/pkg/goanalysis"
 )
 
 func NewErrorLint(cfg *config.ErrorLintSettings) *goanalysis.Linter {
 	a := errorlint.NewAnalyzer()
 
-	cfgMap := map[string]map[string]interface{}{}
+	cfgMap := map[string]map[string]any{}
 
 	if cfg != nil {
-		cfgMap[a.Name] = map[string]interface{}{
-			"errorf":     cfg.Errorf,
-			"asserts":    cfg.Asserts,
-			"comparison": cfg.Comparison,
+		cfgMap[a.Name] = map[string]any{
+			"errorf":       cfg.Errorf,
+			"errorf-multi": cfg.ErrorfMulti,
+			"asserts":      cfg.Asserts,
+			"comparison":   cfg.Comparison,
 		}
 	}
 

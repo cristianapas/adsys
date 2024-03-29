@@ -11,13 +11,13 @@ import (
 	"sync"
 
 	"github.com/kisielk/errcheck/errcheck"
-	"github.com/pkg/errors"
 	"golang.org/x/tools/go/analysis"
 	"golang.org/x/tools/go/packages"
 
 	"github.com/golangci/golangci-lint/pkg/config"
 	"github.com/golangci/golangci-lint/pkg/fsutils"
-	"github.com/golangci/golangci-lint/pkg/golinters/goanalysis"
+	"github.com/golangci/golangci-lint/pkg/goanalysis"
+	"github.com/golangci/golangci-lint/pkg/golinters/internal"
 	"github.com/golangci/golangci-lint/pkg/lint/linter"
 	"github.com/golangci/golangci-lint/pkg/result"
 )
@@ -36,8 +36,8 @@ func NewErrcheck(settings *config.ErrcheckSettings) *goanalysis.Linter {
 
 	return goanalysis.NewLinter(
 		errcheckName,
-		"Errcheck is a program for checking for unchecked errors "+
-			"in go programs. These unchecked errors can be critical bugs in some cases",
+		"errcheck is a program for checking for unchecked errors in Go code. "+
+			"These unchecked errors can be critical bugs in some cases",
 		[]*analysis.Analyzer{analyzer},
 		nil,
 	).WithContextSetter(func(lintCtx *linter.Context) {
@@ -50,7 +50,7 @@ func NewErrcheck(settings *config.ErrcheckSettings) *goanalysis.Linter {
 
 		checker.Tags = lintCtx.Cfg.Run.BuildTags
 
-		analyzer.Run = func(pass *analysis.Pass) (interface{}, error) {
+		analyzer.Run = func(pass *analysis.Pass) (any, error) {
 			issues := runErrCheck(lintCtx, pass, checker)
 			if err != nil {
 				return nil, err
@@ -95,7 +95,7 @@ func runErrCheck(lintCtx *linter.Context, pass *analysis.Pass, checker *errcheck
 				code = err.FuncName
 			}
 
-			text = fmt.Sprintf("Error return value of %s is not checked", formatCode(code, lintCtx.Cfg))
+			text = fmt.Sprintf("Error return value of %s is not checked", internal.FormatCode(code, lintCtx.Cfg))
 		}
 
 		issues[i] = goanalysis.NewIssue(
@@ -143,7 +143,7 @@ func parseIgnoreConfig(s string) (map[string]*regexp.Regexp, error) {
 func getChecker(errCfg *config.ErrcheckSettings) (*errcheck.Checker, error) {
 	ignoreConfig, err := parseIgnoreConfig(errCfg.Ignore)
 	if err != nil {
-		return nil, errors.Wrap(err, "failed to parse 'ignore' directive")
+		return nil, fmt.Errorf("failed to parse 'ignore' directive: %w", err)
 	}
 
 	checker := errcheck.Checker{
@@ -252,7 +252,7 @@ func readExcludeFile(name string) ([]string, error) {
 	}
 
 	if fh == nil {
-		return nil, errors.Wrapf(err, "failed reading exclude file: %s", name)
+		return nil, fmt.Errorf("failed reading exclude file: %s: %w", name, err)
 	}
 
 	scanner := bufio.NewScanner(fh)
@@ -263,7 +263,7 @@ func readExcludeFile(name string) ([]string, error) {
 	}
 
 	if err := scanner.Err(); err != nil {
-		return nil, errors.Wrapf(err, "failed scanning file: %s", name)
+		return nil, fmt.Errorf("failed scanning file: %s: %w", name, err)
 	}
 
 	return excludes, nil
