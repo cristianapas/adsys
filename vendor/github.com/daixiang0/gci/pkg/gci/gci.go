@@ -4,9 +4,8 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	goFormat "go/format"
 	"os"
-	"sort"
-	"strings"
 	"sync"
 
 	"github.com/hexops/gotextdiff"
@@ -50,6 +49,16 @@ func WriteFormattedFiles(paths []string, cfg config.Config) error {
 	})
 }
 
+func ListUnFormattedFiles(paths []string, cfg config.Config) error {
+	return processGoFilesInPaths(paths, cfg, func(filePath string, unmodifiedFile, formattedFile []byte) error {
+		if bytes.Equal(unmodifiedFile, formattedFile) {
+			return nil
+		}
+		fmt.Println(filePath)
+		return nil
+	})
+}
+
 func DiffFormattedFiles(paths []string, cfg config.Config) error {
 	return processStdInAndGoFilesInPaths(paths, cfg, func(filePath string, unmodifiedFile, formattedFile []byte) error {
 		fileURI := span.URIFromPath(filePath)
@@ -77,11 +86,11 @@ func DiffFormattedFilesToArray(paths []string, cfg config.Config, diffs *[]strin
 type fileFormattingFunc func(filePath string, unmodifiedFile, formattedFile []byte) error
 
 func processStdInAndGoFilesInPaths(paths []string, cfg config.Config, fileFunc fileFormattingFunc) error {
-	return ProcessFiles(io.StdInGenerator.Combine(io.GoFilesInPathsGenerator(paths)), cfg, fileFunc)
+	return ProcessFiles(io.StdInGenerator.Combine(io.GoFilesInPathsGenerator(paths, cfg.SkipVendor)), cfg, fileFunc)
 }
 
 func processGoFilesInPaths(paths []string, cfg config.Config, fileFunc fileFormattingFunc) error {
-	return ProcessFiles(io.GoFilesInPathsGenerator(paths), cfg, fileFunc)
+	return ProcessFiles(io.GoFilesInPathsGenerator(paths, cfg.SkipVendor), cfg, fileFunc)
 }
 
 func ProcessFiles(fileGenerator io.FileGeneratorFunc, cfg config.Config, fileFunc fileFormattingFunc) error {
@@ -118,11 +127,17 @@ func LoadFormatGoFile(file io.FileObj, cfg config.Config) (src, dist []byte, err
 		return nil, nil, err
 	}
 
+	return LoadFormat(src, file.Path(), cfg)
+}
+
+func LoadFormat(in []byte, path string, cfg config.Config) (src, dist []byte, err error) {
+	src = in
+
 	if cfg.SkipGenerated && parse.IsGeneratedFileByComment(string(src)) {
 		return src, src, nil
 	}
 
-	imports, headEnd, tailStart, err := parse.ParseFile(src, file.Path())
+	imports, headEnd, tailStart, cStart, cEnd, err := parse.ParseFile(src, path)
 	if err != nil {
 		if errors.Is(err, parse.NoImportError{}) {
 			return src, src, nil
@@ -131,7 +146,7 @@ func LoadFormatGoFile(file io.FileObj, cfg config.Config) (src, dist []byte, err
 	}
 
 	// do not do format if only one import
-	if len(imports) == 1 {
+	if len(imports) <= 1 {
 		return src, src, nil
 	}
 
@@ -140,79 +155,46 @@ func LoadFormatGoFile(file io.FileObj, cfg config.Config) (src, dist []byte, err
 		return nil, nil, err
 	}
 
-	head := src[:headEnd]
-	tail := src[tailStart:]
-
-	// sort for custom sections
-	customKeys := make([]string, 0, len(result))
-	for k := range result {
-		if strings.HasPrefix(k, "prefix(") {
-			customKeys = append(customKeys, k)
-		}
-	}
-
 	firstWithIndex := true
 
 	var body []byte
-	// order: standard > default > custom
-	if len(result["standard"]) > 0 {
-		for _, d := range result["standard"] {
-			AddIndent(&body, &firstWithIndex)
-			body = append(body, src[d.Start:d.End]...)
-		}
 
-		body = append(body, utils.Linebreak)
-	}
-
-	if len(result["default"]) > 0 {
-		for _, d := range result["default"] {
-			AddIndent(&body, &firstWithIndex)
-			body = append(body, src[d.Start:d.End]...)
-		}
-
-		body = append(body, utils.Linebreak)
-	}
-
-	if len(customKeys) > 0 {
-		sort.Sort(sort.StringSlice(customKeys))
-		for i, k := range customKeys {
-			for _, d := range result[k] {
+	// order by section list
+	for _, s := range cfg.Sections {
+		if len(result[s.String()]) > 0 {
+			if len(body) > 0 {
+				body = append(body, utils.Linebreak)
+			}
+			for _, d := range result[s.String()] {
 				AddIndent(&body, &firstWithIndex)
 				body = append(body, src[d.Start:d.End]...)
 			}
-			if i+1 < len(customKeys) {
-				body = append(body, utils.Linebreak)
-			}
 		}
-
-		body = append(body, utils.Linebreak)
 	}
 
-	if len(result["blank"]) > 0 {
-		for _, d := range result["blank"] {
-			AddIndent(&body, &firstWithIndex)
-			body = append(body, src[d.Start:d.End]...)
-		}
+	head := make([]byte, headEnd)
+	copy(head, src[:headEnd])
+	tail := make([]byte, len(src)-tailStart)
+	copy(tail, src[tailStart:])
 
-		body = append(body, utils.Linebreak)
+	// ensure C
+	if cStart != 0 {
+		head = append(head, src[cStart:cEnd]...)
+		head = append(head, utils.Linebreak)
 	}
 
-	if len(result["dot"]) > 0 {
-		for _, d := range result["dot"] {
-			AddIndent(&body, &firstWithIndex)
-			body = append(body, src[d.Start:d.End]...)
-		}
+	// add beginning of import block
+	head = append(head, `import (`...)
+	head = append(head, utils.Linebreak)
+	// add end of import block
+	body = append(body, []byte{utils.RightParenthesis, utils.Linebreak}...)
 
-		body = append(body, utils.Linebreak)
-	}
-
-	// remove breakline in the end
-	for body[len(body)-1] == utils.Linebreak {
-		body = body[:len(body)-1]
-	}
-
-	if tail[0] != utils.Linebreak {
-		body = append(body, utils.Linebreak)
+	log.L().Debug(fmt.Sprintf("head:\n%s", head))
+	log.L().Debug(fmt.Sprintf("body:\n%s", body))
+	if len(tail) > 20 {
+		log.L().Debug(fmt.Sprintf("tail:\n%s", tail[:20]))
+	} else {
+		log.L().Debug(fmt.Sprintf("tail:\n%s", tail))
 	}
 
 	var totalLen int
@@ -224,6 +206,15 @@ func LoadFormatGoFile(file io.FileObj, cfg config.Config) (src, dist []byte, err
 	var i int
 	for _, s := range slices {
 		i += copy(dist[i:], s)
+	}
+
+	// remove ^M(\r\n) from Win to Unix
+	dist = bytes.ReplaceAll(dist, []byte{utils.WinLinebreak}, []byte{utils.Linebreak})
+
+	log.L().Debug(fmt.Sprintf("raw:\n%s", dist))
+	dist, err = goFormat.Source(dist)
+	if err != nil {
+		return nil, nil, err
 	}
 
 	return src, dist, nil
